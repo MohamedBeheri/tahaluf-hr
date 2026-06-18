@@ -1,0 +1,8 @@
+[build]
+  publish = "."
+
+# تطبيق صفحة واحدة (ثابت) — لا حاجة لأمر بناء
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

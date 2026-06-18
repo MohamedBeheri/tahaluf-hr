@@ -1,0 +1,61 @@
+rules_version = '2';
+// =====================================================================
+//  قواعد حماية Firestore — نظام تقييم الأداء (التحالف الوطني)
+//  انسخ هذا الملف في: Firebase Console → Firestore Database → Rules → Publish
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- دوال مساعدة ----
+    function signedIn() { return request.auth != null; }
+    function profile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+    function role()    { return profile().role; }
+    function myDept()  { return profile().deptId; }
+    function myEmp()   { return profile().employeeId; }
+    function isGM()    { return signedIn() && role() == 'general_manager'; }
+    function isMgr()   { return signedIn() && role() == 'dept_manager'; }
+
+    // ---- الإدارات / الأقسام / البنود: قراءة لأي مستخدم مسجّل، التعديل للمدير العام ----
+    match /departments/{id} {
+      allow read: if signedIn();
+      allow write: if isGM();
+    }
+    match /sections/{id} {
+      allow read: if signedIn();
+      allow write: if isGM();
+    }
+    match /criteria/{id} {
+      allow read: if signedIn();
+      allow write: if isGM();
+    }
+
+    // ---- الموظفون ----
+    // القراءة: المدير العام = الكل | مدير الإدارة = إدارته | الموظف = سجله
+    match /employees/{empId} {
+      allow read: if isGM()
+        || (isMgr() && resource.data.deptId == myDept())
+        || (signedIn() && role() == 'employee' && empId == myEmp());
+      // الإضافة/التعديل/الحذف: المدير العام (الكل) أو مدير الإدارة (إدارته)
+      allow create: if isGM() || (isMgr() && request.resource.data.deptId == myDept());
+      allow update, delete: if isGM() || (isMgr() && resource.data.deptId == myDept());
+    }
+
+    // ---- التقييمات (معرّف المستند = معرّف الموظف، وفيه deptId للتصفية) ----
+    match /evaluations/{empId} {
+      allow read: if isGM()
+        || (isMgr() && resource.data.deptId == myDept())
+        || (signedIn() && role() == 'employee' && empId == myEmp());
+      allow create: if isGM() || (isMgr() && request.resource.data.deptId == myDept());
+      allow update, delete: if isGM() || (isMgr() && resource.data.deptId == myDept());
+    }
+
+    // ---- ملفات الصلاحيات ----
+    // كل مستخدم يقرأ ملفه، والمدير العام يقرأ/يكتب الكل
+    match /profiles/{uid} {
+      allow read: if signedIn() && (uid == request.auth.uid || isGM());
+      allow write: if isGM();
+    }
+  }
+}
