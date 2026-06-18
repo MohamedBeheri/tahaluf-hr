@@ -9,6 +9,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="config.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -22,7 +23,20 @@
   --text:#1C1C1E;--text2:#5A5A5E;--text3:#9A9A9E;
   --border:#E0DDD6;--radius:10px;
 }
-body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
+/* الوضع الليلي (Dark Mode) */
+html[data-theme="dark"]{
+  --bg:#15171C;--surface:#1E2128;--surface2:#272B33;
+  --accent:#1E7A45;--accent2:#4AA3C7;--accent-light:#1C3A4A;
+  --green:#3DBC78;--green-light:#1B3B2C;
+  --amber:#E0A229;--amber-light:#3D3216;
+  --red:#E0675C;--red-light:#3D2422;
+  --purple:#B07BC9;--purple-light:#2E2238;
+  --text:#ECECEE;--text2:#A9ACB3;--text3:#71757D;
+  --border:#333842;
+}
+html[data-theme="dark"] tr:hover td{background:#22262E}
+html[data-theme="dark"] .star{color:#3A3F49}
+body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;transition:background .2s,color .2s}
 .app{display:flex;height:100vh;overflow:hidden}
 .sidebar{width:230px;background:var(--accent);color:#fff;display:flex;flex-direction:column;flex-shrink:0;transition:width .2s}
 .sidebar-logo{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.12)}
@@ -241,7 +255,13 @@ textarea{resize:vertical;min-height:65px}
   <div class="main">
     <div class="topbar">
       <h1 id="page-title">لوحة التحكم</h1>
-      <div class="topbar-actions" id="topbar-actions"></div>
+      <div class="topbar-actions" id="topbar-actions">
+        <div id="clock" style="text-align:left;line-height:1.3;font-size:12px;color:var(--text2)">
+          <div id="clock-date" style="font-weight:500;color:var(--text)"></div>
+          <div id="clock-time" style="font-size:11px"></div>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="theme-toggle" onclick="toggleTheme()" title="الوضع الليلي/النهاري" style="font-size:15px;padding:6px 10px">🌙</button>
+      </div>
     </div>
     <div class="content">
 
@@ -249,9 +269,19 @@ textarea{resize:vertical;min-height:65px}
       <div class="page active" id="page-dashboard">
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-val" id="stat-total">0</div><div class="stat-label">إجمالي الموظفين</div></div>
+          <div class="stat-card" style="border-right-color:var(--accent2)"><div class="stat-val" id="stat-depts" style="color:var(--accent2)">0</div><div class="stat-label">عدد الإدارات</div></div>
           <div class="stat-card" style="border-right-color:var(--green)"><div class="stat-val" id="stat-evaluated" style="color:var(--green)">0</div><div class="stat-label">تم تقييمهم</div></div>
           <div class="stat-card" style="border-right-color:var(--amber)"><div class="stat-val" id="stat-pending" style="color:var(--amber)">0</div><div class="stat-label">في الانتظار</div></div>
           <div class="stat-card" style="border-right-color:var(--purple)"><div class="stat-val" id="stat-avg" style="color:var(--purple)">—</div><div class="stat-label">متوسط التقييم / 5</div></div>
+          <div class="stat-card" style="border-right-color:var(--accent)"><div class="stat-val" id="stat-rate" style="color:var(--accent)">0%</div><div class="stat-label">نسبة الإنجاز</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin-bottom:14px">
+          <div class="card"><div class="card-header"><span class="card-title">📊 متوسط التقييم حسب الإدارة</span></div><div style="height:260px;position:relative"><canvas id="chart-dept-avg"></canvas></div></div>
+          <div class="card"><div class="card-header"><span class="card-title">🥧 توزيع التقديرات</span></div><div style="height:260px;position:relative"><canvas id="chart-ratings"></canvas></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+          <div class="card"><div class="card-header"><span class="card-title">👥 عدد الموظفين حسب الإدارة</span></div><div style="height:240px;position:relative"><canvas id="chart-dept-emps"></canvas></div></div>
+          <div class="card"><div class="card-header"><span class="card-title">🏆 أعلى ٥ تقييمات</span></div><div id="top-performers"></div></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
           <div class="card"><div class="card-header"><span class="card-title">نسبة الإنجاز حسب الإدارة</span></div><div id="dept-progress"></div></div>
@@ -861,11 +891,16 @@ function avatarHTML(emp,size=36,cls=''){
 // ===================== DASHBOARD =====================
 function renderDashboard(){
   const emps=visibleEmps();const evs=visibleEvals();
+  // بطاقات الملخص
+  const deptsWithEmps=departments.filter(d=>emps.some(e=>e.deptId===d.id)).length;
   gId('stat-total').textContent=emps.length;
+  gId('stat-depts').textContent=isGM()?departments.length:deptsWithEmps;
   gId('stat-evaluated').textContent=evs.length;
-  gId('stat-pending').textContent=emps.length-evs.length;
+  gId('stat-pending').textContent=Math.max(0,emps.length-evs.length);
   const avg=evs.length?(evs.reduce((a,e)=>a+e.total,0)/evs.length).toFixed(1):'—';
   gId('stat-avg').textContent=avg;
+  gId('stat-rate').textContent=(emps.length?Math.round(evs.length/emps.length*100):0)+'%';
+  // نسبة الإنجاز حسب الإدارة
   let dp='';
   departments.forEach(d=>{
     const de=emps.filter(e=>e.deptId===d.id);if(!de.length)return;
@@ -877,16 +912,94 @@ function renderDashboard(){
     </div>`;
   });
   gId('dept-progress').innerHTML=dp||'<div class="empty-state" style="padding:20px">لا توجد إدارات</div>';
+  // آخر التقييمات
   let re='';
   [...evs].reverse().slice(0,5).forEach(ev=>{
     const emp=employees.find(e=>e.id===ev.empId);if(!emp)return;
     re+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
       ${avatarHTML(emp,32)}
-      <div style="flex:1"><div style="font-size:13px;font-weight:500">${emp.name}</div><div style="font-size:11px;color:var(--text3)">${ev.evalDate}</div></div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:500">${emp.name}</div><div style="font-size:11px;color:var(--text3)">${ev.evalDate||''}</div></div>
       <span class="badge ${scoreClass(ev.total)}">${ev.total.toFixed(1)}</span>
     </div>`;
   });
   gId('recent-evals').innerHTML=re||'<div class="empty-state" style="padding:20px"><div class="empty-icon">📋</div><p>لا توجد تقييمات</p></div>';
+  // أعلى ٥ تقييمات
+  let tp='';
+  [...evs].sort((a,b)=>b.total-a.total).slice(0,5).forEach((ev,i)=>{
+    const emp=employees.find(e=>e.id===ev.empId);if(!emp)return;
+    const medal=['🥇','🥈','🥉'][i]||`${i+1}.`;
+    tp+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="width:22px;text-align:center">${medal}</span>${avatarHTML(emp,30)}
+      <div style="flex:1"><div style="font-size:13px;font-weight:500">${emp.name}</div><div style="font-size:11px;color:var(--text3)">${gDept(emp.deptId)?.name||''}</div></div>
+      <span class="badge ${scoreClass(ev.total)}">${ev.total.toFixed(1)} ${scoreLabel(ev.total)}</span>
+    </div>`;
+  });
+  gId('top-performers').innerHTML=tp||'<div class="empty-state" style="padding:20px"><div class="empty-icon">🏆</div><p>لا توجد تقييمات</p></div>';
+  renderCharts(emps,evs);
+}
+
+// ===================== الرسوم البيانية =====================
+let charts={};
+function chartTextColor(){return getComputedStyle(document.documentElement).getPropertyValue('--text2').trim()||'#666'}
+function chartGridColor(){return getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#ddd'}
+function destroyCharts(){Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}});charts={}}
+function renderCharts(emps,evs){
+  if(typeof Chart==='undefined')return;
+  destroyCharts();
+  Chart.defaults.font.family="'IBM Plex Sans Arabic',sans-serif";
+  const tc=chartTextColor(),gc=chartGridColor();
+  const PAL=['#2E86AB','#1A7A4A','#B7770D','#6C3483','#A93226','#16A085','#D35400','#2980B9'];
+  // 1) متوسط التقييم حسب الإدارة
+  const deptLabels=[],deptAvg=[],deptEmpCount=[];
+  departments.forEach(d=>{
+    const de=emps.filter(e=>e.deptId===d.id);if(!de.length)return;
+    const dv=evs.filter(ev=>de.find(e=>e.id===ev.empId));
+    deptLabels.push(d.name);
+    deptAvg.push(dv.length?+(dv.reduce((a,e)=>a+e.total,0)/dv.length).toFixed(2):0);
+    deptEmpCount.push(de.length);
+  });
+  const cv1=gId('chart-dept-avg');
+  if(cv1)charts.deptAvg=new Chart(cv1,{type:'bar',data:{labels:deptLabels,datasets:[{label:'متوسط التقييم',data:deptAvg,backgroundColor:PAL,borderRadius:6,maxBarThickness:48}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,max:5,ticks:{color:tc},grid:{color:gc}},x:{ticks:{color:tc},grid:{display:false}}}}});
+  // 2) توزيع التقديرات (دائري)
+  const buckets={'ممتاز':0,'جيد جداً':0,'جيد':0,'مقبول':0};
+  evs.forEach(ev=>{buckets[scoreLabel(ev.total)]++});
+  const cv2=gId('chart-ratings');
+  if(cv2)charts.ratings=new Chart(cv2,{type:'doughnut',data:{labels:Object.keys(buckets),datasets:[{data:Object.values(buckets),backgroundColor:['#1A7A4A','#2E86AB','#B7770D','#A93226'],borderWidth:2,borderColor:getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()||'#fff'}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:tc,padding:12,font:{size:12}}}}}});
+  // 3) عدد الموظفين حسب الإدارة
+  const cv3=gId('chart-dept-emps');
+  if(cv3)charts.deptEmps=new Chart(cv3,{type:'bar',data:{labels:deptLabels,datasets:[{label:'عدد الموظفين',data:deptEmpCount,backgroundColor:'#2E86AB',borderRadius:6,maxBarThickness:48}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{color:tc,precision:0},grid:{color:gc}},y:{ticks:{color:tc},grid:{display:false}}}}});
+}
+
+// ===================== الوضع الليلي/النهاري =====================
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  const btn=gId('theme-toggle');if(btn)btn.textContent=t==='dark'?'☀️':'🌙';
+  try{localStorage.setItem('hr_theme',t)}catch(e){}
+}
+function toggleTheme(){
+  const cur=document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';
+  applyTheme(cur==='dark'?'light':'dark');
+  // إعادة رسم المخططات بألوان الوضع الجديد
+  if(currentUser&&gId('page-dashboard').classList.contains('active'))renderDashboard();
+}
+function initTheme(){
+  let t='light';try{t=localStorage.getItem('hr_theme')||'light'}catch(e){}
+  applyTheme(t);
+}
+
+// ===================== الوقت والتاريخ (توقيت مصر) =====================
+function startClock(){
+  function tick(){
+    const dEl=gId('clock-date'),tEl=gId('clock-time');if(!dEl)return;
+    const now=new Date();
+    const opt={timeZone:'Africa/Cairo'};
+    dEl.textContent=now.toLocaleDateString('ar-EG',{...opt,weekday:'long',year:'numeric',month:'long',day:'numeric'});
+    tEl.textContent=now.toLocaleTimeString('ar-EG',{...opt,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+  }
+  tick();setInterval(tick,1000);
 }
 
 // ===================== EMPLOYEES =====================
@@ -1708,6 +1821,8 @@ function downloadTemplate(){
 
 // ===================== INIT =====================
 async function init(){
+  initTheme();
+  startClock();
   if(!FB_ON){
     gId('demo-box').style.display='block';
     await loadAll(); // تحميل البيانات والمستخدمين المحليين لتفعيل تسجيل الدخول
